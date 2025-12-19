@@ -51,6 +51,26 @@ class PriceRecord(BaseModel):
     source: str
 
 
+class PriceSnapshot(BaseModel):
+    id: UUID
+    product_id: UUID
+    current_price: Optional[float]
+    list_price: Optional[float]
+    availability: Optional[str]
+    collected_at: datetime
+    source: str
+    extreme_discount: bool = False
+    improbable_price: bool = False
+
+
+class PriceSnapshotCreate(BaseModel):
+    product_id: UUID
+    current_price: Optional[float]
+    list_price: Optional[float]
+    availability: Optional[str]
+    source: str = "amazon"
+
+
 class AlertBase(BaseModel):
     product_id: UUID
     threshold_price: float
@@ -106,4 +126,19 @@ def new_price_record(product_id: UUID, price: float, source: str) -> PriceRecord
         price=price,
         source=source,
         collected_at=datetime.utcnow(),
+    )
+
+
+def new_price_snapshot(
+    data: PriceSnapshotCreate,
+    *,
+    extreme_discount: bool = False,
+    improbable_price: bool = False,
+) -> PriceSnapshot:
+    return PriceSnapshot(
+        id=uuid4(),
+        collected_at=datetime.utcnow(),
+        extreme_discount=extreme_discount,
+        improbable_price=improbable_price,
+        **data.model_dump(),
     )
