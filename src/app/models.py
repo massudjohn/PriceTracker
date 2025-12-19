@@ -98,6 +98,36 @@ class WatchlistState(BaseModel):
     alerts: list[Alert]
 
 
+class UserPreference(BaseModel):
+    id: UUID
+    email: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    webhook_url: Optional[HttpUrl] = None
+    slack_webhook_url: Optional[HttpUrl] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class UserPreferenceCreate(BaseModel):
+    email: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    webhook_url: Optional[HttpUrl] = None
+    slack_webhook_url: Optional[HttpUrl] = None
+
+
+class UserPreferenceUpdate(BaseModel):
+    email: Optional[str] = None
+    smtp_host: Optional[str] = None
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    webhook_url: Optional[HttpUrl] = None
+    slack_webhook_url: Optional[HttpUrl] = None
+
+
 def new_product(data: ProductCreate) -> Product:
     now = datetime.utcnow()
     return Product(

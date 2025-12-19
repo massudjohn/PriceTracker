@@ -25,28 +25,31 @@ scheduler = Scheduler(queue=queue, connection=_connection)
 def fetch_product_page(product_id: UUID | None = None) -> None:
     """Fetch and store the latest price snapshot for one or all products."""
     repo = get_repository()
-    with PriceFetcher(repo) as fetcher:
-        if product_id:
-            product = repo.get_product(product_id)
-            if not product:
-                logger.warning("Product not found during fetch", extra={"product_id": str(product_id)})
-                return
-            asin = fetcher.extract_asin(str(product.url))
-            if not asin:
-                logger.warning("Could not derive ASIN from URL", extra={"product_id": str(product_id)})
-                return
-            fetcher.fetch_and_store(asin, product.id)
-            return
-
-        for product in repo.list_products():
-            asin = fetcher.extract_asin(str(product.url))
-            if not asin:
-                logger.warning("Could not derive ASIN from URL", extra={"product_id": str(product.id)})
-                continue
-            try:
+    try:
+        with PriceFetcher(repo) as fetcher:
+            if product_id:
+                product = repo.get_product(product_id)
+                if not product:
+                    logger.warning("Product not found during fetch", extra={"product_id": str(product_id)})
+                    return
+                asin = fetcher.extract_asin(str(product.url))
+                if not asin:
+                    logger.warning("Could not derive ASIN from URL", extra={"product_id": str(product_id)})
+                    return
                 fetcher.fetch_and_store(asin, product.id)
-            except Exception:
-                logger.exception("Failed to fetch product page", extra={"product_id": str(product.id)})
+                return
+
+            for product in repo.list_products():
+                asin = fetcher.extract_asin(str(product.url))
+                if not asin:
+                    logger.warning("Could not derive ASIN from URL", extra={"product_id": str(product.id)})
+                    continue
+                try:
+                    fetcher.fetch_and_store(asin, product.id)
+                except Exception:
+                    logger.exception("Failed to fetch product page", extra={"product_id": str(product.id)})
+    finally:
+        repo.close()
 
 
 def queue_periodic_fetches(interval_minutes: int = 30) -> None:

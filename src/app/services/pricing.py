@@ -9,8 +9,9 @@ from uuid import UUID
 from bs4 import BeautifulSoup
 
 from ..clients.amazon import AmazonClient
-from ..database import InMemoryRepository
+from ..database import SqlRepository
 from ..models import PriceSnapshot, PriceSnapshotCreate, ProductUpdate
+from .notifications import NotificationService
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +96,10 @@ class PriceParser:
 
 
 class PriceFetcher:
-    def __init__(self, repo: InMemoryRepository, client: Optional[AmazonClient] = None) -> None:
+    def __init__(self, repo: SqlRepository, client: Optional[AmazonClient] = None) -> None:
         self.repo = repo
         self.client = client or AmazonClient()
+        self.notifier = NotificationService(self.repo)
 
     @staticmethod
     def extract_asin(url: str) -> Optional[str]:
@@ -110,13 +112,29 @@ class PriceFetcher:
         html = self.client.fetch_product_page(asin)
         parsed = PriceParser.parse_product_page(html)
 
+        median_price = self.repo.median_price_last_30_days(product_id)
+
+        extreme_discount = False
+        improbable_price = False
+
+        if parsed.current_price is not None:
+            if median_price is not None:
+                extreme_discount = parsed.current_price <= median_price * 0.6
+                improbable_price = parsed.current_price > median_price * 3
+            if parsed.current_price <= 0:
+                improbable_price = True
+            if parsed.list_price is not None and parsed.current_price < parsed.list_price * 0.1:
+                improbable_price = True
+
         snapshot = self.repo.record_price_snapshot(
             PriceSnapshotCreate(
                 product_id=product_id,
                 current_price=parsed.current_price,
                 list_price=parsed.list_price,
                 availability=parsed.availability,
-            )
+            ),
+            extreme_discount=extreme_discount,
+            improbable_price=improbable_price,
         )
 
         if parsed.current_price is not None:
@@ -132,6 +150,9 @@ class PriceFetcher:
                 "improbable_price": snapshot.improbable_price,
             },
         )
+        self.notifier.notify_if_anomaly(product_id, snapshot)
+        if parsed.current_price is not None:
+            self.notifier.notify_threshold_matches(product_id, parsed.current_price)
         return snapshot
 
     def close(self) -> None:
