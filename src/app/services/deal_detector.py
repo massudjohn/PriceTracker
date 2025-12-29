@@ -89,27 +89,35 @@ class DealDetector:
                 on_product_found(product)
 
             # Check if it's a deal
-            if scraped.current_price and price_stats and price_stats.all_time_low:
-                analysis = self._analyze_deal(
-                    current_price=scraped.current_price,
-                    all_time_low=price_stats.all_time_low,
-                    min_discount=category.min_discount_percent,
-                )
+            analysis = None
+            if scraped.current_price:
+                if price_stats and price_stats.all_time_low:
+                    # Use CamelCamelCamel all-time low
+                    analysis = self._analyze_deal(
+                        current_price=scraped.current_price,
+                        all_time_low=price_stats.all_time_low,
+                        min_discount=category.min_discount_percent,
+                    )
+                elif scraped.list_price and scraped.list_price > scraped.current_price:
+                    # Fallback: use list price as reference if no CamelCamelCamel data
+                    analysis = self._analyze_deal(
+                        current_price=scraped.current_price,
+                        all_time_low=scraped.list_price,
+                        min_discount=category.min_discount_percent,
+                        is_list_price_fallback=True,
+                    )
 
-                if analysis.is_deal:
+                if analysis and analysis.is_deal:
                     deal = self._create_deal(product, analysis)
                     deals.append(deal)
 
                     logger.info(
                         f"DEAL FOUND: {scraped.name[:50]} - "
-                        f"${scraped.current_price:.2f} ({analysis.discount_percent:.0f}% below ATL)"
+                        f"${scraped.current_price:.2f} ({analysis.discount_percent:.0f}% off)"
                     )
 
                     if on_deal_found:
                         on_deal_found(deal)
-
-            # Rate limiting
-            time.sleep(1.0)
 
         elapsed = time.time() - start_time
         logger.info(
@@ -151,10 +159,11 @@ class DealDetector:
         current_price: float,
         all_time_low: float,
         min_discount: float = 50.0,
+        is_list_price_fallback: bool = False,
     ) -> DealAnalysis:
         """Analyze if the current price represents a deal."""
 
-        # Calculate discount from all-time low
+        # Calculate discount from all-time low (or list price as fallback)
         if all_time_low <= 0:
             return DealAnalysis(
                 is_deal=False,
@@ -162,12 +171,15 @@ class DealDetector:
                 discount_percent=0,
                 current_price=current_price,
                 all_time_low=all_time_low,
-                reason="Invalid all-time low price",
+                reason="Invalid reference price",
             )
 
-        # Price below all-time low = new all-time low!
+        # Price below reference price
         if current_price < all_time_low:
             discount_percent = ((all_time_low - current_price) / all_time_low) * 100
+
+            # For list price fallback, require higher discount threshold
+            effective_min_discount = min_discount if not is_list_price_fallback else max(min_discount, 60.0)
 
             # Check if it's a price error (too good to be true)
             if discount_percent >= 90:
@@ -177,24 +189,30 @@ class DealDetector:
                     discount_percent=discount_percent,
                     current_price=current_price,
                     all_time_low=all_time_low,
-                    reason=f"Potential price error: {discount_percent:.0f}% below all-time low",
+                    reason=f"Potential price error: {discount_percent:.0f}% off",
                 )
 
-            if discount_percent >= min_discount:
+            if discount_percent >= effective_min_discount:
+                deal_type = "all_time_low" if not is_list_price_fallback else "extreme_discount"
+                reason = (
+                    f"New all-time low: {discount_percent:.0f}% below ATL ${all_time_low:.2f}"
+                    if not is_list_price_fallback
+                    else f"Major discount: {discount_percent:.0f}% off list price ${all_time_low:.2f}"
+                )
                 return DealAnalysis(
                     is_deal=True,
-                    deal_type="all_time_low",
+                    deal_type=deal_type,
                     discount_percent=discount_percent,
                     current_price=current_price,
                     all_time_low=all_time_low,
-                    reason=f"New all-time low: {discount_percent:.0f}% below previous ATL of ${all_time_low:.2f}",
+                    reason=reason,
                 )
 
-        # Price at or near all-time low (within 5%)
-        if current_price <= all_time_low * 1.05:
+        # Price at or near all-time low (within 5%) - only for actual ATL data
+        if not is_list_price_fallback and current_price <= all_time_low * 1.05:
             return DealAnalysis(
                 is_deal=True,
-                deal_type="extreme_discount",
+                deal_type="all_time_low",
                 discount_percent=0,
                 current_price=current_price,
                 all_time_low=all_time_low,
@@ -207,7 +225,7 @@ class DealDetector:
             discount_percent=0,
             current_price=current_price,
             all_time_low=all_time_low,
-            reason=f"Current price ${current_price:.2f} is above ATL ${all_time_low:.2f}",
+            reason=f"Current price ${current_price:.2f} is above reference ${all_time_low:.2f}",
         )
 
     def _create_discovered_product(

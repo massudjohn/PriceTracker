@@ -15,10 +15,11 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
 ]
 
 
@@ -38,30 +39,56 @@ class CamelCamelCamelClient:
 
     BASE_URL = "https://camelcamelcamel.com"
 
-    def __init__(self, timeout: float = 15.0, max_retries: int = 3):
+    def __init__(self, timeout: float = 20.0, max_retries: int = 2):
         self.timeout = timeout
         self.max_retries = max_retries
         self._client: Optional[httpx.Client] = None
+        self._request_count = 0
+        self._last_request_time = 0.0
 
     def _get_client(self) -> httpx.Client:
         if self._client is None:
+            user_agent = random.choice(USER_AGENTS)
             self._client = httpx.Client(
                 timeout=self.timeout,
                 follow_redirects=True,
                 headers={
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.5",
+                    "User-Agent": user_agent,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
                     "Accept-Encoding": "gzip, deflate, br",
-                    "DNT": "1",
-                    "Connection": "keep-alive",
+                    "Cache-Control": "max-age=0",
+                    "Sec-Ch-Ua": '"Not A(Brand";v="8", "Chromium";v="131", "Google Chrome";v="131"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Windows"',
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
                     "Upgrade-Insecure-Requests": "1",
                 },
             )
         return self._client
 
-    def _random_delay(self) -> None:
-        """Random delay to avoid rate limiting."""
-        time.sleep(random.uniform(1.0, 3.0))
+    def _smart_delay(self) -> None:
+        """Smart delay that increases based on request frequency."""
+        now = time.time()
+        elapsed = now - self._last_request_time
+
+        # Base delay with jitter
+        base_delay = random.uniform(2.0, 4.0)
+
+        # Add extra delay every few requests to look more human
+        if self._request_count > 0 and self._request_count % 5 == 0:
+            base_delay += random.uniform(3.0, 6.0)
+
+        # If we made a request recently, wait longer
+        if elapsed < 3.0:
+            base_delay += (3.0 - elapsed)
+
+        time.sleep(base_delay)
+        self._last_request_time = time.time()
+        self._request_count += 1
 
     def get_price_history(self, asin: str) -> Optional[PriceStats]:
         """
@@ -69,39 +96,51 @@ class CamelCamelCamelClient:
 
         Returns PriceStats with all-time low, high, and average prices.
         """
+        # Always add delay before making a request
+        self._smart_delay()
+
         url = f"{self.BASE_URL}/product/{asin}"
 
         for attempt in range(self.max_retries):
             try:
                 client = self._get_client()
-                client.headers["User-Agent"] = random.choice(USER_AGENTS)
+
+                # Add referer for subsequent requests to look more natural
+                if self._request_count > 1:
+                    client.headers["Referer"] = f"{self.BASE_URL}/"
 
                 response = client.get(url)
 
                 if response.status_code == 404:
-                    logger.info(f"Product not found on CamelCamelCamel: {asin}")
+                    logger.debug(f"Product not found on CamelCamelCamel: {asin}")
                     return None
 
                 if response.status_code == 429:
                     logger.warning(f"Rate limited by CamelCamelCamel, waiting... (attempt {attempt + 1})")
-                    time.sleep(30 * (attempt + 1))
+                    time.sleep(60 * (attempt + 1))
                     continue
+
+                if response.status_code == 403:
+                    # 403 often means we're being blocked - back off significantly
+                    logger.debug(f"Blocked by CamelCamelCamel for {asin}, skipping")
+                    # Don't retry on 403, just skip this product
+                    return None
 
                 response.raise_for_status()
                 return self._parse_price_page(asin, response.text)
 
             except httpx.TimeoutException:
-                logger.warning(f"Timeout fetching CamelCamelCamel for {asin} (attempt {attempt + 1})")
-                self._random_delay()
+                logger.debug(f"Timeout fetching CamelCamelCamel for {asin} (attempt {attempt + 1})")
+                time.sleep(random.uniform(5.0, 10.0))
             except httpx.HTTPStatusError as e:
-                logger.warning(f"HTTP error {e.response.status_code} for {asin}")
+                logger.debug(f"HTTP error {e.response.status_code} for {asin}")
                 if e.response.status_code >= 500:
-                    self._random_delay()
+                    time.sleep(random.uniform(5.0, 10.0))
                     continue
                 return None
             except Exception as e:
-                logger.exception(f"Error fetching CamelCamelCamel for {asin}: {e}")
-                self._random_delay()
+                logger.debug(f"Error fetching CamelCamelCamel for {asin}: {e}")
+                time.sleep(random.uniform(3.0, 6.0))
 
         return None
 
