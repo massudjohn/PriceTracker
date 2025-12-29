@@ -276,18 +276,22 @@ def dashboard() -> str:
                 <div class="grid">
                     <div class="sidebar">
                         <div class="card">
-                            <h3>Add Category to Monitor</h3>
-                            <label>Category Name</label>
-                            <input id="cat-name" placeholder="e.g., Wireless Headphones" />
-                            <label>Amazon Category/Search URL</label>
-                            <input id="cat-url" placeholder="https://amazon.com/s?k=..." />
+                            <h3>Search for Products to Monitor</h3>
+                            <label>What are you looking for?</label>
+                            <input id="cat-search" placeholder="e.g., wireless headphones, mechanical keyboard" />
+                            <label>Max Price (optional)</label>
+                            <input id="cat-maxprice" type="number" step="0.01" placeholder="Leave empty for no limit" />
                             <label>Min Reviews</label>
                             <input id="cat-reviews" type="number" value="100" />
                             <label>Min Rating</label>
                             <input id="cat-rating" type="number" step="0.1" value="4.0" />
                             <label>Min Discount % (below all-time low)</label>
                             <input id="cat-discount" type="number" value="50" />
-                            <button class="btn-primary" onclick="addCategory()">Add Category</button>
+                            <button class="btn-primary" onclick="addCategory()">Start Monitoring</button>
+                            <p style="margin-top: 0.75rem; font-size: 0.8rem; color: #64748b;">
+                                Or paste an Amazon URL directly:
+                            </p>
+                            <input id="cat-url" placeholder="https://amazon.com/s?k=..." style="font-size: 0.85rem;" />
                         </div>
 
                         <div class="card">
@@ -332,21 +336,52 @@ def dashboard() -> str:
 
             <script>
                 async function addCategory() {
+                    const search = document.getElementById('cat-search').value.trim();
+                    const directUrl = document.getElementById('cat-url').value.trim();
+                    const maxPrice = parseFloat(document.getElementById('cat-maxprice').value) || null;
+
+                    let url, name;
+
+                    if (directUrl) {
+                        // Use direct URL if provided
+                        url = directUrl;
+                        name = search || 'Custom Search';
+                    } else if (search) {
+                        // Build Amazon search URL from search term
+                        const encodedSearch = encodeURIComponent(search);
+                        url = `https://www.amazon.com/s?k=${encodedSearch}`;
+                        name = search;
+                    } else {
+                        alert('Please enter a search term or paste an Amazon URL');
+                        return;
+                    }
+
                     const res = await fetch('/api/categories', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            name: document.getElementById('cat-name').value,
-                            url: document.getElementById('cat-url').value,
+                            name: name,
+                            url: url,
+                            max_price: maxPrice,
                             min_reviews: parseInt(document.getElementById('cat-reviews').value) || 100,
                             min_rating: parseFloat(document.getElementById('cat-rating').value) || 4.0,
                             min_discount_percent: parseFloat(document.getElementById('cat-discount').value) || 50,
                         })
                     });
                     if (res.ok) {
-                        document.getElementById('cat-name').value = '';
+                        document.getElementById('cat-search').value = '';
                         document.getElementById('cat-url').value = '';
+                        document.getElementById('cat-maxprice').value = '';
                         refreshCategories();
+                        // Optionally auto-scan the new category
+                        const category = await res.json();
+                        if (confirm('Category added! Would you like to scan for deals now?')) {
+                            await fetch('/api/categories/' + category.id + '/scan', { method: 'POST' });
+                            refreshDeals();
+                            refreshCategories();
+                        }
+                    } else {
+                        alert('Failed to add category. Check the URL is valid.');
                     }
                 }
 
@@ -397,7 +432,9 @@ def dashboard() -> str:
                         <div class="category-item">
                             <h4>${c.name}</h4>
                             <div class="category-meta">
-                                ${c.product_count} products | Min ${c.min_discount_percent}% off ATL<br>
+                                ${c.product_count} products | ${c.min_discount_percent}% off ATL
+                                ${c.max_price ? ` | Max $${c.max_price}` : ''}<br>
+                                ${c.min_reviews}+ reviews | ${c.min_rating}+ rating<br>
                                 Last scan: ${c.last_scanned_at ? new Date(c.last_scanned_at).toLocaleString() : 'Never'}
                             </div>
                             <div class="btn-group">
