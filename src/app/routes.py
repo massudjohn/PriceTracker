@@ -206,8 +206,13 @@ def dashboard() -> str:
                 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
                 .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
                 h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #38bdf8; }
-                h2 { font-size: 1.25rem; margin-bottom: 1rem; color: #94a3b8; font-weight: 500; }
                 .subtitle { color: #64748b; margin-bottom: 2rem; }
+                .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid #334155; padding-bottom: 1rem; }
+                .tab { padding: 0.75rem 1.5rem; border: none; border-radius: 8px 8px 0 0; cursor: pointer; font-weight: 500; font-size: 1rem; transition: all 0.2s; background: transparent; color: #64748b; }
+                .tab:hover { color: #e2e8f0; }
+                .tab.active { background: #1e293b; color: #38bdf8; }
+                .tab-content { display: none; }
+                .tab-content.active { display: block; }
                 .grid { display: grid; grid-template-columns: 350px 1fr; gap: 2rem; }
                 .sidebar { display: flex; flex-direction: column; gap: 1.5rem; }
                 .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; border: 1px solid #334155; }
@@ -228,20 +233,26 @@ def dashboard() -> str:
                 .btn-secondary:hover { background: #475569; }
                 .btn-group { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
                 .deal-grid { display: grid; gap: 1rem; }
-                .deal-card { background: #1e293b; border-radius: 12px; padding: 1.25rem; border: 1px solid #334155; display: grid; grid-template-columns: 100px 1fr auto; gap: 1rem; align-items: center; transition: border-color 0.2s; }
-                .deal-card:hover { border-color: #38bdf8; }
-                .deal-card.price-error { border-color: #f59e0b; }
-                .deal-card.all-time-low { border-color: #22c55e; }
-                .deal-img { width: 100px; height: 100px; object-fit: contain; background: white; border-radius: 8px; }
+                .deal-card { background: #1e293b; border-radius: 12px; padding: 1.25rem; border: 2px solid #334155; display: grid; grid-template-columns: 120px 1fr auto; gap: 1.25rem; align-items: center; transition: all 0.2s; }
+                .deal-card:hover { border-color: #38bdf8; transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+                .deal-card.price_error { border-color: #f59e0b; background: linear-gradient(135deg, #1e293b 0%, #422006 100%); }
+                .deal-card.all_time_low { border-color: #22c55e; background: linear-gradient(135deg, #1e293b 0%, #052e16 100%); }
+                .deal-img { width: 120px; height: 120px; object-fit: contain; background: white; border-radius: 8px; }
+                .deal-info { min-width: 0; }
                 .deal-info h4 { font-size: 1rem; color: #f1f5f9; margin-bottom: 0.5rem; line-height: 1.4; }
                 .deal-info h4 a { color: inherit; text-decoration: none; }
                 .deal-info h4 a:hover { color: #38bdf8; }
-                .deal-meta { font-size: 0.875rem; color: #64748b; display: flex; gap: 1rem; flex-wrap: wrap; }
-                .deal-price { text-align: right; }
-                .current-price { font-size: 1.5rem; font-weight: bold; color: #22c55e; }
-                .old-price { font-size: 0.875rem; color: #64748b; text-decoration: line-through; }
-                .discount-badge { display: inline-block; background: #22c55e; color: black; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: bold; font-size: 0.875rem; margin-top: 0.5rem; }
+                .deal-meta { font-size: 0.875rem; color: #94a3b8; display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }
+                .deal-meta span { display: flex; align-items: center; gap: 0.25rem; }
+                .deal-time { font-size: 0.75rem; color: #64748b; margin-top: 0.5rem; }
+                .deal-price { text-align: right; min-width: 140px; }
+                .current-price { font-size: 1.75rem; font-weight: bold; color: #22c55e; }
+                .old-price { font-size: 0.875rem; color: #64748b; text-decoration: line-through; margin-bottom: 0.25rem; }
+                .discount-badge { display: inline-block; background: #22c55e; color: black; padding: 0.375rem 0.75rem; border-radius: 6px; font-weight: bold; font-size: 1rem; margin-top: 0.5rem; }
                 .discount-badge.warning { background: #f59e0b; }
+                .deal-type-badge { display: inline-block; font-size: 0.7rem; padding: 0.2rem 0.5rem; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 0.25rem; }
+                .deal-type-badge.price_error { background: rgba(245, 158, 11, 0.2); color: #f59e0b; }
+                .deal-type-badge.all_time_low { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
                 .category-item { background: #0f172a; padding: 1rem; border-radius: 8px; margin-bottom: 0.75rem; }
                 .category-item h4 { color: #f1f5f9; margin-bottom: 0.5rem; }
                 .category-meta { font-size: 0.875rem; color: #64748b; }
@@ -251,16 +262,26 @@ def dashboard() -> str:
                 .status.info { background: rgba(14, 165, 233, 0.2); color: #38bdf8; }
                 .empty-state { text-align: center; padding: 3rem; color: #64748b; }
                 .stats { display: flex; gap: 2rem; margin-bottom: 1.5rem; }
-                .stat { text-align: center; }
-                .stat-value { font-size: 2rem; font-weight: bold; color: #38bdf8; }
-                .stat-label { font-size: 0.875rem; color: #64748b; }
-                @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+                .stat { text-align: center; padding: 1rem 2rem; background: #1e293b; border-radius: 12px; border: 1px solid #334155; }
+                .stat-value { font-size: 2.5rem; font-weight: bold; color: #38bdf8; }
+                .stat-label { font-size: 0.875rem; color: #64748b; margin-top: 0.25rem; }
+                .auto-refresh { display: flex; align-items: center; gap: 0.5rem; font-size: 0.875rem; color: #64748b; }
+                .auto-refresh input { width: auto; margin: 0; }
+                .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 1rem; }
+                .sort-select { width: auto; min-width: 150px; margin: 0; }
+                .deals-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
+                .deals-count { font-size: 0.875rem; color: #64748b; }
+                @media (max-width: 900px) {
+                    .grid { grid-template-columns: 1fr; }
+                    .deal-card { grid-template-columns: 80px 1fr; }
+                    .deal-price { grid-column: 1 / -1; text-align: left; display: flex; align-items: center; gap: 1rem; }
+                }
             </style>
         </head>
         <body>
             <div class="container">
                 <h1>Deal Hunter</h1>
-                <p class="subtitle">Automatic deal detection with 50%+ off all-time low alerts</p>
+                <p class="subtitle">Automatic deal detection - alerts when prices drop 50%+ below all-time low</p>
 
                 <div class="stats">
                     <div class="stat">
@@ -271,36 +292,83 @@ def dashboard() -> str:
                         <div class="stat-value" id="stat-categories">0</div>
                         <div class="stat-label">Categories Monitored</div>
                     </div>
+                    <div class="stat">
+                        <div class="stat-value" id="stat-best-discount">0%</div>
+                        <div class="stat-label">Best Discount</div>
+                    </div>
                 </div>
 
-                <div class="grid">
-                    <div class="sidebar">
-                        <div class="card">
-                            <h3>Search for Products to Monitor</h3>
-                            <label>What are you looking for?</label>
-                            <input id="cat-search" placeholder="e.g., wireless headphones, mechanical keyboard" />
-                            <label>Max Price (optional)</label>
-                            <input id="cat-maxprice" type="number" step="0.01" placeholder="Leave empty for no limit" />
-                            <label>Min Reviews</label>
-                            <input id="cat-reviews" type="number" value="100" />
-                            <label>Min Rating</label>
-                            <input id="cat-rating" type="number" step="0.1" value="4.0" />
-                            <label>Min Discount % (below all-time low)</label>
-                            <input id="cat-discount" type="number" value="50" />
-                            <button class="btn-primary" onclick="addCategory()">Start Monitoring</button>
-                            <p style="margin-top: 0.75rem; font-size: 0.8rem; color: #64748b;">
-                                Or paste an Amazon URL directly:
-                            </p>
-                            <input id="cat-url" placeholder="https://amazon.com/s?k=..." style="font-size: 0.85rem;" />
-                        </div>
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('deals')">Deals</button>
+                    <button class="tab" onclick="switchTab('categories')">Categories</button>
+                    <button class="tab" onclick="switchTab('settings')">Settings</button>
+                </div>
 
-                        <div class="card">
-                            <h3>Monitored Categories</h3>
-                            <div id="categories-list">
-                                <div class="empty-state">No categories yet</div>
+                <!-- DEALS TAB -->
+                <div id="tab-deals" class="tab-content active">
+                    <div class="toolbar">
+                        <div class="btn-group">
+                            <button class="btn-primary" onclick="refreshDeals()">Refresh</button>
+                            <button class="btn-warning" onclick="scanAllCategories()">Scan All Categories</button>
+                        </div>
+                        <div style="display: flex; gap: 1rem; align-items: center;">
+                            <select id="sort-deals" class="sort-select" onchange="refreshDeals()">
+                                <option value="newest">Newest First</option>
+                                <option value="discount">Biggest Discount</option>
+                                <option value="price-low">Lowest Price</option>
+                                <option value="price-high">Highest Price</option>
+                            </select>
+                            <label class="auto-refresh">
+                                <input type="checkbox" id="auto-refresh" onchange="toggleAutoRefresh()" />
+                                Auto-refresh (30s)
+                            </label>
+                        </div>
+                    </div>
+                    <div class="deals-header">
+                        <span class="deals-count" id="deals-count">Loading deals...</span>
+                    </div>
+                    <div id="deals-list" class="deal-grid">
+                        <div class="empty-state">Loading deals...</div>
+                    </div>
+                </div>
+
+                <!-- CATEGORIES TAB -->
+                <div id="tab-categories" class="tab-content">
+                    <div class="grid">
+                        <div class="sidebar">
+                            <div class="card">
+                                <h3>Add Category to Monitor</h3>
+                                <label>What are you looking for?</label>
+                                <input id="cat-search" placeholder="e.g., wireless headphones, mechanical keyboard" />
+                                <label>Max Price (optional)</label>
+                                <input id="cat-maxprice" type="number" step="0.01" placeholder="Leave empty for no limit" />
+                                <label>Min Reviews</label>
+                                <input id="cat-reviews" type="number" value="100" />
+                                <label>Min Rating</label>
+                                <input id="cat-rating" type="number" step="0.1" value="4.0" />
+                                <label>Min Discount % (below all-time low)</label>
+                                <input id="cat-discount" type="number" value="50" />
+                                <button class="btn-primary" onclick="addCategory()">Start Monitoring</button>
+                                <p style="margin-top: 0.75rem; font-size: 0.8rem; color: #64748b;">
+                                    Or paste an Amazon URL directly:
+                                </p>
+                                <input id="cat-url" placeholder="https://amazon.com/s?k=..." style="font-size: 0.85rem;" />
                             </div>
                         </div>
+                        <div class="main">
+                            <div class="card">
+                                <h3>Monitored Categories</h3>
+                                <div id="categories-list">
+                                    <div class="empty-state">No categories yet</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
+                <!-- SETTINGS TAB -->
+                <div id="tab-settings" class="tab-content">
+                    <div class="grid">
                         <div class="card">
                             <h3>Email Notifications</h3>
                             <label>Email Address</label>
@@ -312,29 +380,44 @@ def dashboard() -> str:
                             <label>SMTP Password</label>
                             <input id="pref-pass" type="password" placeholder="App password" />
                             <div class="btn-group">
-                                <button class="btn-primary" onclick="savePrefs()">Save</button>
-                                <button class="btn-success" onclick="testEmail()">Test Email</button>
+                                <button class="btn-primary" onclick="savePrefs()">Save Settings</button>
+                                <button class="btn-success" onclick="testEmail()">Send Test Email</button>
                             </div>
                             <div id="email-status"></div>
-                        </div>
-                    </div>
-
-                    <div class="main">
-                        <div class="card">
-                            <h3>Deal Feed</h3>
-                            <div class="btn-group" style="margin-bottom: 1rem;">
-                                <button class="btn-primary" onclick="refreshDeals()">Refresh Deals</button>
-                                <button class="btn-warning" onclick="scanAllCategories()">Scan All Categories</button>
-                            </div>
-                            <div id="deals-list" class="deal-grid">
-                                <div class="empty-state">No deals found yet. Add a category and scan for deals!</div>
-                            </div>
                         </div>
                     </div>
                 </div>
             </div>
 
             <script>
+                let autoRefreshInterval = null;
+
+                function switchTab(tabName) {
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+                    document.querySelector(`[onclick="switchTab('${tabName}')"]`).classList.add('active');
+                    document.getElementById('tab-' + tabName).classList.add('active');
+                }
+
+                function toggleAutoRefresh() {
+                    if (document.getElementById('auto-refresh').checked) {
+                        autoRefreshInterval = setInterval(refreshDeals, 30000);
+                    } else {
+                        clearInterval(autoRefreshInterval);
+                        autoRefreshInterval = null;
+                    }
+                }
+
+                function timeAgo(dateStr) {
+                    const date = new Date(dateStr);
+                    const now = new Date();
+                    const seconds = Math.floor((now - date) / 1000);
+                    if (seconds < 60) return 'just now';
+                    if (seconds < 3600) return Math.floor(seconds / 60) + ' min ago';
+                    if (seconds < 86400) return Math.floor(seconds / 3600) + ' hours ago';
+                    return Math.floor(seconds / 86400) + ' days ago';
+                }
+
                 async function addCategory() {
                     const search = document.getElementById('cat-search').value.trim();
                     const directUrl = document.getElementById('cat-url').value.trim();
@@ -343,11 +426,9 @@ def dashboard() -> str:
                     let url, name;
 
                     if (directUrl) {
-                        // Use direct URL if provided
                         url = directUrl;
                         name = search || 'Custom Search';
                     } else if (search) {
-                        // Build Amazon search URL from search term
                         const encodedSearch = encodeURIComponent(search);
                         url = `https://www.amazon.com/s?k=${encodedSearch}`;
                         name = search;
@@ -373,12 +454,12 @@ def dashboard() -> str:
                         document.getElementById('cat-url').value = '';
                         document.getElementById('cat-maxprice').value = '';
                         refreshCategories();
-                        // Optionally auto-scan the new category
                         const category = await res.json();
-                        if (confirm('Category added! Would you like to scan for deals now?')) {
+                        if (confirm('Category added! Scan for deals now?')) {
                             await fetch('/api/categories/' + category.id + '/scan', { method: 'POST' });
                             refreshDeals();
                             refreshCategories();
+                            switchTab('deals');
                         }
                     } else {
                         alert('Failed to add category. Check the URL is valid.');
@@ -408,6 +489,9 @@ def dashboard() -> str:
                 }
 
                 async function scanAllCategories() {
+                    const btn = event.target;
+                    btn.disabled = true;
+                    btn.textContent = 'Scanning...';
                     const res = await fetch('/api/categories');
                     const categories = await res.json();
                     for (const cat of categories) {
@@ -415,6 +499,8 @@ def dashboard() -> str:
                             await fetch('/api/categories/' + cat.id + '/scan', { method: 'POST' });
                         }
                     }
+                    btn.disabled = false;
+                    btn.textContent = 'Scan All Categories';
                     refreshDeals();
                     refreshCategories();
                 }
@@ -425,7 +511,7 @@ def dashboard() -> str:
                     document.getElementById('stat-categories').textContent = categories.length;
                     const container = document.getElementById('categories-list');
                     if (categories.length === 0) {
-                        container.innerHTML = '<div class="empty-state">No categories yet</div>';
+                        container.innerHTML = '<div class="empty-state">No categories yet. Add one above!</div>';
                         return;
                     }
                     container.innerHTML = categories.map(c => `
@@ -435,7 +521,7 @@ def dashboard() -> str:
                                 ${c.product_count} products | ${c.min_discount_percent}% off ATL
                                 ${c.max_price ? ` | Max $${c.max_price}` : ''}<br>
                                 ${c.min_reviews}+ reviews | ${c.min_rating}+ rating<br>
-                                Last scan: ${c.last_scanned_at ? new Date(c.last_scanned_at).toLocaleString() : 'Never'}
+                                Last scan: ${c.last_scanned_at ? timeAgo(c.last_scanned_at) : 'Never'}
                             </div>
                             <div class="btn-group">
                                 <button class="btn-warning" onclick="scanCategory('${c.id}', this)">Scan</button>
@@ -446,29 +532,55 @@ def dashboard() -> str:
                 }
 
                 async function refreshDeals() {
-                    const res = await fetch('/api/deals');
+                    const res = await fetch('/api/deals?limit=100');
                     const data = await res.json();
-                    document.getElementById('stat-deals').textContent = data.total_count;
+
+                    let deals = data.deals || [];
+                    const sortBy = document.getElementById('sort-deals').value;
+
+                    // Sort deals
+                    switch(sortBy) {
+                        case 'discount':
+                            deals.sort((a, b) => b.discount_percent - a.discount_percent);
+                            break;
+                        case 'price-low':
+                            deals.sort((a, b) => a.current_price - b.current_price);
+                            break;
+                        case 'price-high':
+                            deals.sort((a, b) => b.current_price - a.current_price);
+                            break;
+                        default: // newest
+                            deals.sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
+                    }
+
+                    document.getElementById('stat-deals').textContent = deals.length;
+                    document.getElementById('deals-count').textContent = `${deals.length} deal${deals.length !== 1 ? 's' : ''} found`;
+
+                    // Find best discount
+                    const bestDiscount = deals.length > 0 ? Math.max(...deals.map(d => d.discount_percent)) : 0;
+                    document.getElementById('stat-best-discount').textContent = bestDiscount.toFixed(0) + '%';
+
                     const container = document.getElementById('deals-list');
-                    if (data.deals.length === 0) {
+                    if (deals.length === 0) {
                         container.innerHTML = '<div class="empty-state">No deals found yet. Add a category and scan for deals!</div>';
                         return;
                     }
-                    container.innerHTML = data.deals.map(d => `
+                    container.innerHTML = deals.map(d => `
                         <div class="deal-card ${d.deal_type}">
-                            <img class="deal-img" src="${d.product_image || 'https://via.placeholder.com/100?text=No+Image'}" alt="" />
+                            <img class="deal-img" src="${d.product_image || 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%22120%22><rect fill=%22%23334155%22 width=%22120%22 height=%22120%22/><text fill=%22%2364748b%22 font-size=%2212%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22>No Image</text></svg>'}" alt="" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22120%22 height=%22120%22><rect fill=%22%23334155%22 width=%22120%22 height=%22120%22/><text fill=%22%2364748b%22 font-size=%2212%22 x=%2250%25%22 y=%2250%25%22 text-anchor=%22middle%22 dy=%22.3em%22>No Image</text></svg>'" />
                             <div class="deal-info">
-                                <h4><a href="${d.product_url}" target="_blank">${d.product_name.substring(0, 100)}${d.product_name.length > 100 ? '...' : ''}</a></h4>
+                                <h4><a href="${d.product_url}" target="_blank">${d.product_name.substring(0, 120)}${d.product_name.length > 120 ? '...' : ''}</a></h4>
                                 <div class="deal-meta">
-                                    ${d.rating ? `<span>Rating: ${d.rating.toFixed(1)}</span>` : ''}
+                                    ${d.rating ? `<span>★ ${d.rating.toFixed(1)}</span>` : ''}
                                     ${d.review_count ? `<span>${d.review_count.toLocaleString()} reviews</span>` : ''}
-                                    <span>${d.deal_type.replace('_', ' ')}</span>
                                 </div>
+                                <div class="deal-type-badge ${d.deal_type}">${d.deal_type === 'price_error' ? 'PRICE ERROR!' : 'ALL-TIME LOW'}</div>
+                                <div class="deal-time">Found ${timeAgo(d.detected_at)}</div>
                             </div>
                             <div class="deal-price">
+                                <div class="old-price">Was: $${d.all_time_low.toFixed(2)}</div>
                                 <div class="current-price">$${d.current_price.toFixed(2)}</div>
-                                <div class="old-price">ATL: $${d.all_time_low.toFixed(2)}</div>
-                                <div class="discount-badge ${d.deal_type === 'price_error' ? 'warning' : ''}">${d.discount_percent.toFixed(0)}% below ATL</div>
+                                <div class="discount-badge ${d.deal_type === 'price_error' ? 'warning' : ''}">${d.discount_percent.toFixed(0)}% OFF</div>
                             </div>
                         </div>
                     `).join('');
