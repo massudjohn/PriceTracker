@@ -11,8 +11,9 @@ alerting when prices cross alert thresholds or look suspiciously discounted.
   prices and availability, and stores snapshots for analysis.
 - **Anomaly detection** – flags extreme discounts (>=40% drop vs. 30-day median) and improbable
   prices (near-zero, extreme outliers, or list-price mismatches).
-- **Notifications** – email, generic webhook, or Slack webhook delivery for anomalies and threshold
-  matches. SMTP settings can be supplied through user preferences or `SMTP_*` environment variables.
+- **Email notifications** – receive email alerts when prices drop below your threshold or when
+  anomalies are detected. SMTP settings can be configured via the dashboard or environment variables.
+- **Multi-channel notifications** – supports email, generic webhook, and Slack webhook delivery.
 - **Background jobs** – RQ worker and scheduler enqueue recurring fetches for every tracked product
   when Redis is available.
 
@@ -49,6 +50,80 @@ from app.background.tasks import fetch_product_page
 fetch_product_page()
 PY
 ```
+
+## Email Notifications
+
+PriceTracker can send email notifications when:
+- A product's price drops below your alert threshold
+- An extreme discount is detected (40%+ off the 30-day median price)
+- An improbable price is detected (potential pricing error or scam)
+
+### Configuration
+
+Configure email notifications through the dashboard at `http://localhost:8000` or via the API:
+
+```bash
+curl -X PUT http://localhost:8000/api/preferences \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "your-email@example.com",
+    "smtp_host": "smtp.gmail.com",
+    "smtp_username": "your-email@gmail.com",
+    "smtp_password": "your-app-password"
+  }'
+```
+
+### Environment Variables
+
+SMTP settings can also be configured via environment variables (preferences take precedence):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SMTP_HOST` | SMTP server hostname | None |
+| `SMTP_PORT` | SMTP server port | 587 |
+| `SMTP_USERNAME` | SMTP authentication username | None |
+| `SMTP_PASSWORD` | SMTP authentication password | None |
+
+### Gmail Setup
+
+For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833):
+
+1. Enable 2-Step Verification on your Google account
+2. Go to Security → App passwords
+3. Generate a new app password for "Mail"
+4. Use `smtp.gmail.com` as the SMTP host and the app password as `smtp_password`
+
+### Testing Email Configuration
+
+Test your email setup using the dashboard's "Send Test Email" button or via the API:
+
+```bash
+curl -X POST http://localhost:8000/api/notifications/test-email
+```
+
+## API Endpoints
+
+### Products
+- `POST /api/products` – Add a product to track
+- `GET /api/products` – List all tracked products
+- `GET /api/products/{id}` – Get product details
+- `PUT /api/products/{id}` – Update product
+- `DELETE /api/products/{id}` – Remove product
+- `POST /api/products/{id}/fetch` – Manually fetch current price
+- `GET /api/products/{id}/snapshots` – Get price history
+
+### Alerts
+- `POST /api/alerts` – Create a price alert
+- `GET /api/alerts` – List all alerts
+- `PUT /api/alerts/{id}` – Update alert
+- `DELETE /api/alerts/{id}` – Remove alert
+
+### Preferences
+- `GET /api/preferences` – Get notification preferences
+- `PUT /api/preferences` – Update notification preferences
+
+### Notifications
+- `POST /api/notifications/test-email` – Send a test email
 
 ## Project layout
 
