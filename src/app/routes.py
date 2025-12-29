@@ -2,26 +2,24 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .database import SqlRepository, get_repository
 from .models import (
-    Alert,
-    AlertCreate,
-    AlertUpdate,
-    PriceSnapshot,
-    Product,
-    ProductCreate,
-    ProductUpdate,
+    Category,
+    CategoryCreate,
+    CategoryUpdate,
+    Deal,
+    DealFeed,
+    ScanResult,
     UserPreference,
     UserPreferenceCreate,
     UserPreferenceUpdate,
-    WatchlistState,
 )
+from .services.deal_detector import DealDetector
 from .services.notifications import NotificationService
-from .services.pricing import PriceFetcher
 
 
 class TestEmailResponse(BaseModel):
@@ -30,10 +28,11 @@ class TestEmailResponse(BaseModel):
     sent_at: datetime
 
 
-class PriceFetchResponse(BaseModel):
+class ScanCategoryResponse(BaseModel):
     success: bool
     message: str
-    snapshot: Optional[PriceSnapshot] = None
+    result: Optional[ScanResult] = None
+
 
 router = APIRouter()
 
@@ -46,74 +45,128 @@ def get_repo():
         repo.close()
 
 
-@router.get("/watchlist", response_model=WatchlistState)
-def read_watchlist(repo: SqlRepository = Depends(get_repo)) -> WatchlistState:
-    return WatchlistState(products=repo.list_products(), alerts=repo.list_alerts())
+# ============ Category Endpoints ============
+
+@router.post("/categories", response_model=Category, status_code=status.HTTP_201_CREATED)
+def create_category(payload: CategoryCreate, repo: SqlRepository = Depends(get_repo)) -> Category:
+    """Add a new category to monitor for deals."""
+    return repo.create_category(payload)
 
 
-# Product endpoints
-@router.post("/products", response_model=Product, status_code=status.HTTP_201_CREATED)
-def create_product(payload: ProductCreate, repo: SqlRepository = Depends(get_repo)) -> Product:
-    return repo.create_product(payload)
+@router.get("/categories", response_model=list[Category])
+def list_categories(active_only: bool = False, repo: SqlRepository = Depends(get_repo)) -> list[Category]:
+    """List all monitored categories."""
+    return repo.list_categories(active_only=active_only)
 
 
-@router.get("/products", response_model=list[Product])
-def list_products(repo: SqlRepository = Depends(get_repo)) -> list[Product]:
-    return repo.list_products()
+@router.get("/categories/{category_id}", response_model=Category)
+def get_category(category_id: str, repo: SqlRepository = Depends(get_repo)) -> Category:
+    """Get a specific category."""
+    category = repo.get_category(UUID(category_id))
+    if not category:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    return category
 
 
-@router.get("/products/{product_id}", response_model=Product)
-def get_product(product_id: str, repo: SqlRepository = Depends(get_repo)) -> Product:
-    product = repo.get_product(UUID(product_id))
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return product
+@router.put("/categories/{category_id}", response_model=Category)
+@router.patch("/categories/{category_id}", response_model=Category)
+def update_category(category_id: str, payload: CategoryUpdate, repo: SqlRepository = Depends(get_repo)) -> Category:
+    """Update a category's settings."""
+    category = repo.update_category(UUID(category_id), payload)
+    if not category:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    return category
 
 
-@router.put("/products/{product_id}", response_model=Product)
-@router.patch("/products/{product_id}", response_model=Product)
-def update_product(product_id: str, payload: ProductUpdate, repo: SqlRepository = Depends(get_repo)) -> Product:
-    product = repo.update_product(UUID(product_id), payload)
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return product
+@router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(category_id: str, repo: SqlRepository = Depends(get_repo)) -> None:
+    """Delete a category."""
+    if not repo.delete_category(UUID(category_id)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
 
 
-@router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_product(product_id: str, repo: SqlRepository = Depends(get_repo)) -> None:
-    if not repo.delete_product(UUID(product_id)):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+@router.post("/categories/{category_id}/scan", response_model=ScanCategoryResponse)
+def scan_category(category_id: str, repo: SqlRepository = Depends(get_repo)) -> ScanCategoryResponse:
+    """Manually trigger a scan of a category for deals."""
+    import time
+
+    category = repo.get_category(UUID(category_id))
+    if not category:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+
+    start_time = time.time()
+    products_found = 0
+    deals_found = 0
+
+    def on_product_found(product):
+        nonlocal products_found
+        products_found += 1
+        repo.upsert_discovered_product(product)
+
+    def on_deal_found(deal):
+        nonlocal deals_found
+        deals_found += 1
+        repo.create_deal(deal)
+        # Send instant notification
+        prefs = repo.get_preferences()
+        if prefs and prefs.instant_notifications and prefs.email:
+            notifier = NotificationService(repo)
+            notifier.send_deal_notification(deal)
+            repo.mark_deal_notified(deal.id)
+
+    try:
+        with DealDetector() as detector:
+            detector.scan_category(
+                category,
+                on_product_found=on_product_found,
+                on_deal_found=on_deal_found,
+            )
+
+        repo.update_category_scan_time(category.id, products_found)
+        elapsed = time.time() - start_time
+
+        return ScanCategoryResponse(
+            success=True,
+            message=f"Scan complete: {products_found} products, {deals_found} deals found",
+            result=ScanResult(
+                category_id=category.id,
+                category_name=category.name,
+                products_found=products_found,
+                deals_found=deals_found,
+                scan_duration_seconds=elapsed,
+            ),
+        )
+    except Exception as e:
+        return ScanCategoryResponse(
+            success=False,
+            message=f"Scan failed: {str(e)}",
+            result=None,
+        )
 
 
-# Alert endpoints
-@router.post("/alerts", response_model=Alert, status_code=status.HTTP_201_CREATED)
-def create_alert(payload: AlertCreate, repo: SqlRepository = Depends(get_repo)) -> Alert:
-    if not repo.get_product(payload.product_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return repo.create_alert(payload)
+# ============ Deal Endpoints ============
+
+@router.get("/deals", response_model=DealFeed)
+def list_deals(include_expired: bool = False, limit: int = 50, repo: SqlRepository = Depends(get_repo)) -> DealFeed:
+    """Get the deal feed."""
+    deals = repo.list_deals(include_expired=include_expired, limit=limit)
+    categories = repo.list_categories(active_only=True)
+    return DealFeed(
+        deals=deals,
+        total_count=len(deals),
+        categories_monitored=len(categories),
+    )
 
 
-@router.get("/alerts", response_model=list[Alert])
-def list_alerts(repo: SqlRepository = Depends(get_repo)) -> list[Alert]:
-    return repo.list_alerts()
+@router.post("/deals/expire-old", response_model=dict)
+def expire_old_deals(hours: int = 24, repo: SqlRepository = Depends(get_repo)) -> dict:
+    """Mark old deals as expired."""
+    count = repo.expire_old_deals(hours=hours)
+    return {"expired_count": count}
 
 
-@router.put("/alerts/{alert_id}", response_model=Alert)
-@router.patch("/alerts/{alert_id}", response_model=Alert)
-def update_alert(alert_id: str, payload: AlertUpdate, repo: SqlRepository = Depends(get_repo)) -> Alert:
-    alert = repo.update_alert(UUID(alert_id), payload)
-    if not alert:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
-    return alert
+# ============ Preferences Endpoints ============
 
-
-@router.delete("/alerts/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_alert(alert_id: str, repo: SqlRepository = Depends(get_repo)) -> None:
-    if not repo.delete_alert(UUID(alert_id)):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
-
-
-# Preferences
 @router.get("/preferences", response_model=UserPreference | None)
 def get_preferences(repo: SqlRepository = Depends(get_repo)) -> UserPreference | None:
     return repo.get_preferences()
@@ -126,7 +179,8 @@ def upsert_preferences(
     return repo.upsert_preferences(payload)
 
 
-# Notification endpoints
+# ============ Notification Endpoints ============
+
 @router.post("/notifications/test-email", response_model=TestEmailResponse)
 def test_email(repo: SqlRepository = Depends(get_repo)) -> TestEmailResponse:
     """Send a test email to verify SMTP configuration."""
@@ -139,178 +193,248 @@ def test_email(repo: SqlRepository = Depends(get_repo)) -> TestEmailResponse:
     )
 
 
-# Price fetch endpoints
-@router.post("/products/{product_id}/fetch", response_model=PriceFetchResponse)
-def fetch_product_price(product_id: str, repo: SqlRepository = Depends(get_repo)) -> PriceFetchResponse:
-    """Manually trigger a price fetch for a specific product."""
-    product = repo.get_product(UUID(product_id))
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+# ============ Dashboard UI ============
 
-    asin = PriceFetcher.extract_asin(str(product.url))
-    if not asin:
-        return PriceFetchResponse(
-            success=False,
-            message="Could not extract ASIN from product URL. Make sure it's a valid Amazon product URL.",
-            snapshot=None,
-        )
-
-    try:
-        with PriceFetcher(repo) as fetcher:
-            snapshot = fetcher.fetch_and_store(asin, product.id)
-            return PriceFetchResponse(
-                success=True,
-                message=f"Price fetched successfully. Current price: ${snapshot.current_price:.2f}" if snapshot.current_price else "Price fetched but no price found.",
-                snapshot=snapshot,
-            )
-    except Exception as e:
-        return PriceFetchResponse(
-            success=False,
-            message=f"Failed to fetch price: {str(e)}",
-            snapshot=None,
-        )
-
-
-@router.get("/products/{product_id}/snapshots", response_model=list[PriceSnapshot])
-def list_product_snapshots(product_id: str, repo: SqlRepository = Depends(get_repo)) -> list[PriceSnapshot]:
-    """Get price history for a product."""
-    product = repo.get_product(UUID(product_id))
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    return repo.list_price_snapshots(UUID(product_id))
-
-
-# Simple UI
 @router.get("/", response_class=HTMLResponse)
 def dashboard() -> str:
     return """
     <html>
         <head>
-            <title>Price Tracker</title>
+            <title>Deal Hunter</title>
             <style>
-                * { box-sizing: border-box; }
-                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; padding: 2rem; background: #f5f7fa; }
-                h1 { color: #2c3e50; margin-bottom: 0.5rem; }
-                h2 { color: #34495e; font-size: 1.2rem; margin-bottom: 1rem; border-bottom: 2px solid #3498db; padding-bottom: 0.5rem; }
-                .container { max-width: 1200px; margin: 0 auto; }
-                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 1.5rem; }
-                .card { background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-                label { display: block; margin-top: 0.75rem; font-weight: 500; color: #555; font-size: 0.9rem; }
-                input { padding: 0.5rem; width: 100%; border: 1px solid #ddd; border-radius: 4px; margin-top: 0.25rem; }
-                input:focus { outline: none; border-color: #3498db; }
-                button { margin-top: 1rem; padding: 0.6rem 1.2rem; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 500; }
-                button:hover { background: #2980b9; }
-                button.secondary { background: #95a5a6; }
-                button.secondary:hover { background: #7f8c8d; }
-                button.success { background: #27ae60; }
-                button.success:hover { background: #219a52; }
-                button.warning { background: #e67e22; }
-                button.warning:hover { background: #d35400; }
-                .btn-group { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-                pre { background: #2c3e50; color: #ecf0f1; padding: 1rem; border-radius: 4px; overflow-x: auto; font-size: 0.85rem; max-height: 400px; overflow-y: auto; }
-                .status { padding: 0.75rem; border-radius: 4px; margin-top: 1rem; }
-                .status.success { background: #d4edda; color: #155724; }
-                .status.error { background: #f8d7da; color: #721c24; }
-                .status.info { background: #d1ecf1; color: #0c5460; }
-                .product-list { list-style: none; padding: 0; }
-                .product-item { background: #f8f9fa; padding: 1rem; border-radius: 4px; margin-bottom: 0.75rem; }
-                .product-item h4 { margin: 0 0 0.5rem 0; color: #2c3e50; }
-                .product-item .price { font-size: 1.25rem; font-weight: bold; color: #27ae60; }
-                .product-item .actions { margin-top: 0.75rem; }
-                .product-item button { margin-top: 0; margin-right: 0.5rem; padding: 0.4rem 0.8rem; font-size: 0.85rem; }
-                .small-text { font-size: 0.8rem; color: #7f8c8d; }
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+                .container { max-width: 1400px; margin: 0 auto; padding: 2rem; }
+                h1 { font-size: 2rem; margin-bottom: 0.5rem; color: #38bdf8; }
+                h2 { font-size: 1.25rem; margin-bottom: 1rem; color: #94a3b8; font-weight: 500; }
+                .subtitle { color: #64748b; margin-bottom: 2rem; }
+                .grid { display: grid; grid-template-columns: 350px 1fr; gap: 2rem; }
+                .sidebar { display: flex; flex-direction: column; gap: 1.5rem; }
+                .card { background: #1e293b; border-radius: 12px; padding: 1.5rem; border: 1px solid #334155; }
+                .card h3 { font-size: 1rem; color: #f1f5f9; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+                label { display: block; margin-bottom: 0.5rem; font-size: 0.875rem; color: #94a3b8; }
+                input, select { width: 100%; padding: 0.625rem; background: #0f172a; border: 1px solid #334155; border-radius: 6px; color: #e2e8f0; margin-bottom: 0.75rem; }
+                input:focus, select:focus { outline: none; border-color: #38bdf8; }
+                button { padding: 0.625rem 1.25rem; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; transition: all 0.2s; }
+                .btn-primary { background: #0ea5e9; color: white; }
+                .btn-primary:hover { background: #0284c7; }
+                .btn-success { background: #22c55e; color: white; }
+                .btn-success:hover { background: #16a34a; }
+                .btn-warning { background: #f59e0b; color: black; }
+                .btn-warning:hover { background: #d97706; }
+                .btn-danger { background: #ef4444; color: white; }
+                .btn-danger:hover { background: #dc2626; }
+                .btn-secondary { background: #334155; color: #e2e8f0; }
+                .btn-secondary:hover { background: #475569; }
+                .btn-group { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+                .deal-grid { display: grid; gap: 1rem; }
+                .deal-card { background: #1e293b; border-radius: 12px; padding: 1.25rem; border: 1px solid #334155; display: grid; grid-template-columns: 100px 1fr auto; gap: 1rem; align-items: center; transition: border-color 0.2s; }
+                .deal-card:hover { border-color: #38bdf8; }
+                .deal-card.price-error { border-color: #f59e0b; }
+                .deal-card.all-time-low { border-color: #22c55e; }
+                .deal-img { width: 100px; height: 100px; object-fit: contain; background: white; border-radius: 8px; }
+                .deal-info h4 { font-size: 1rem; color: #f1f5f9; margin-bottom: 0.5rem; line-height: 1.4; }
+                .deal-info h4 a { color: inherit; text-decoration: none; }
+                .deal-info h4 a:hover { color: #38bdf8; }
+                .deal-meta { font-size: 0.875rem; color: #64748b; display: flex; gap: 1rem; flex-wrap: wrap; }
+                .deal-price { text-align: right; }
+                .current-price { font-size: 1.5rem; font-weight: bold; color: #22c55e; }
+                .old-price { font-size: 0.875rem; color: #64748b; text-decoration: line-through; }
+                .discount-badge { display: inline-block; background: #22c55e; color: black; padding: 0.25rem 0.5rem; border-radius: 4px; font-weight: bold; font-size: 0.875rem; margin-top: 0.5rem; }
+                .discount-badge.warning { background: #f59e0b; }
+                .category-item { background: #0f172a; padding: 1rem; border-radius: 8px; margin-bottom: 0.75rem; }
+                .category-item h4 { color: #f1f5f9; margin-bottom: 0.5rem; }
+                .category-meta { font-size: 0.875rem; color: #64748b; }
+                .status { padding: 0.75rem; border-radius: 6px; margin-top: 1rem; font-size: 0.875rem; }
+                .status.success { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+                .status.error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+                .status.info { background: rgba(14, 165, 233, 0.2); color: #38bdf8; }
+                .empty-state { text-align: center; padding: 3rem; color: #64748b; }
+                .stats { display: flex; gap: 2rem; margin-bottom: 1.5rem; }
+                .stat { text-align: center; }
+                .stat-value { font-size: 2rem; font-weight: bold; color: #38bdf8; }
+                .stat-label { font-size: 0.875rem; color: #64748b; }
+                @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
             </style>
         </head>
         <body>
             <div class="container">
-                <h1>Price Tracker Dashboard</h1>
-                <p class="small-text">Track Amazon product prices and get notified when deals appear.</p>
+                <h1>Deal Hunter</h1>
+                <p class="subtitle">Automatic deal detection with 50%+ off all-time low alerts</p>
 
-                <div class="grid">
-                    <div class="card">
-                        <h2>Add Product</h2>
-                        <label>Product Name <input id="p-name" placeholder="e.g., Sony WH-1000XM5" /></label>
-                        <label>Amazon URL <input id="p-url" placeholder="https://amazon.com/dp/..." /></label>
-                        <label>Target Price ($) <input id="p-price" type="number" step="0.01" placeholder="99.99" /></label>
-                        <button onclick="createProduct()">Add Product</button>
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-value" id="stat-deals">0</div>
+                        <div class="stat-label">Active Deals</div>
                     </div>
-
-                    <div class="card">
-                        <h2>Create Price Alert</h2>
-                        <label>Product ID <input id="a-product" placeholder="Select from products below" /></label>
-                        <label>Alert When Price Below ($) <input id="a-threshold" type="number" step="0.01" placeholder="50.00" /></label>
-                        <label>Notification Channel <input id="a-channel" placeholder="email, webhook, or slack" /></label>
-                        <button onclick="createAlert()">Create Alert</button>
-                    </div>
-
-                    <div class="card">
-                        <h2>Email Notification Settings</h2>
-                        <label>Notification Email <input id="pref-email" type="email" placeholder="you@example.com" /></label>
-                        <label>SMTP Host <input id="pref-smtp" placeholder="smtp.gmail.com" /></label>
-                        <label>SMTP Username <input id="pref-user" placeholder="your-email@gmail.com" /></label>
-                        <label>SMTP Password <input id="pref-pass" type="password" placeholder="App password" /></label>
-                        <label>Webhook URL (optional) <input id="pref-webhook" placeholder="https://..." /></label>
-                        <label>Slack Webhook (optional) <input id="pref-slack" placeholder="https://hooks.slack.com/..." /></label>
-                        <div class="btn-group">
-                            <button onclick="savePrefs()">Save Settings</button>
-                            <button class="success" onclick="testEmail()">Send Test Email</button>
-                        </div>
-                        <div id="email-status"></div>
-                    </div>
-
-                    <div class="card">
-                        <h2>Tracked Products</h2>
-                        <ul id="products-list" class="product-list">
-                            <li class="small-text">Loading...</li>
-                        </ul>
+                    <div class="stat">
+                        <div class="stat-value" id="stat-categories">0</div>
+                        <div class="stat-label">Categories Monitored</div>
                     </div>
                 </div>
 
-                <div class="card" style="margin-top: 1.5rem;">
-                    <h2>Watchlist Data</h2>
-                    <div class="btn-group">
-                        <button onclick="refresh()">Refresh</button>
-                        <button class="secondary" onclick="loadPrefs()">Reload Settings</button>
+                <div class="grid">
+                    <div class="sidebar">
+                        <div class="card">
+                            <h3>Add Category to Monitor</h3>
+                            <label>Category Name</label>
+                            <input id="cat-name" placeholder="e.g., Wireless Headphones" />
+                            <label>Amazon Category/Search URL</label>
+                            <input id="cat-url" placeholder="https://amazon.com/s?k=..." />
+                            <label>Min Reviews</label>
+                            <input id="cat-reviews" type="number" value="100" />
+                            <label>Min Rating</label>
+                            <input id="cat-rating" type="number" step="0.1" value="4.0" />
+                            <label>Min Discount % (below all-time low)</label>
+                            <input id="cat-discount" type="number" value="50" />
+                            <button class="btn-primary" onclick="addCategory()">Add Category</button>
+                        </div>
+
+                        <div class="card">
+                            <h3>Monitored Categories</h3>
+                            <div id="categories-list">
+                                <div class="empty-state">No categories yet</div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <h3>Email Notifications</h3>
+                            <label>Email Address</label>
+                            <input id="pref-email" type="email" placeholder="you@example.com" />
+                            <label>SMTP Host</label>
+                            <input id="pref-smtp" placeholder="smtp.gmail.com" />
+                            <label>SMTP Username</label>
+                            <input id="pref-user" placeholder="your-email@gmail.com" />
+                            <label>SMTP Password</label>
+                            <input id="pref-pass" type="password" placeholder="App password" />
+                            <div class="btn-group">
+                                <button class="btn-primary" onclick="savePrefs()">Save</button>
+                                <button class="btn-success" onclick="testEmail()">Test Email</button>
+                            </div>
+                            <div id="email-status"></div>
+                        </div>
                     </div>
-                    <pre id="output">Loading...</pre>
+
+                    <div class="main">
+                        <div class="card">
+                            <h3>Deal Feed</h3>
+                            <div class="btn-group" style="margin-bottom: 1rem;">
+                                <button class="btn-primary" onclick="refreshDeals()">Refresh Deals</button>
+                                <button class="btn-warning" onclick="scanAllCategories()">Scan All Categories</button>
+                            </div>
+                            <div id="deals-list" class="deal-grid">
+                                <div class="empty-state">No deals found yet. Add a category and scan for deals!</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             <script>
-                async function createProduct() {
-                    const res = await fetch('/api/products', {
+                async function addCategory() {
+                    const res = await fetch('/api/categories', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
-                            name: document.getElementById('p-name').value,
-                            url: document.getElementById('p-url').value,
-                            desired_price: parseFloat(document.getElementById('p-price').value) || null,
+                            name: document.getElementById('cat-name').value,
+                            url: document.getElementById('cat-url').value,
+                            min_reviews: parseInt(document.getElementById('cat-reviews').value) || 100,
+                            min_rating: parseFloat(document.getElementById('cat-rating').value) || 4.0,
+                            min_discount_percent: parseFloat(document.getElementById('cat-discount').value) || 50,
                         })
                     });
                     if (res.ok) {
-                        document.getElementById('p-name').value = '';
-                        document.getElementById('p-url').value = '';
-                        document.getElementById('p-price').value = '';
+                        document.getElementById('cat-name').value = '';
+                        document.getElementById('cat-url').value = '';
+                        refreshCategories();
                     }
-                    refresh();
                 }
 
-                async function createAlert() {
-                    const res = await fetch('/api/alerts', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            product_id: document.getElementById('a-product').value,
-                            threshold_price: parseFloat(document.getElementById('a-threshold').value),
-                            channel: document.getElementById('a-channel').value || null,
-                        })
-                    });
-                    if (res.ok) {
-                        document.getElementById('a-product').value = '';
-                        document.getElementById('a-threshold').value = '';
-                        document.getElementById('a-channel').value = '';
+                async function deleteCategory(id) {
+                    if (!confirm('Delete this category?')) return;
+                    await fetch('/api/categories/' + id, { method: 'DELETE' });
+                    refreshCategories();
+                }
+
+                async function scanCategory(id, btn) {
+                    btn.disabled = true;
+                    btn.textContent = 'Scanning...';
+                    const res = await fetch('/api/categories/' + id + '/scan', { method: 'POST' });
+                    const data = await res.json();
+                    btn.disabled = false;
+                    btn.textContent = 'Scan';
+                    if (data.success) {
+                        alert(data.message);
+                        refreshDeals();
+                        refreshCategories();
+                    } else {
+                        alert('Error: ' + data.message);
                     }
-                    refresh();
+                }
+
+                async function scanAllCategories() {
+                    const res = await fetch('/api/categories');
+                    const categories = await res.json();
+                    for (const cat of categories) {
+                        if (cat.active) {
+                            await fetch('/api/categories/' + cat.id + '/scan', { method: 'POST' });
+                        }
+                    }
+                    refreshDeals();
+                    refreshCategories();
+                }
+
+                async function refreshCategories() {
+                    const res = await fetch('/api/categories');
+                    const categories = await res.json();
+                    document.getElementById('stat-categories').textContent = categories.length;
+                    const container = document.getElementById('categories-list');
+                    if (categories.length === 0) {
+                        container.innerHTML = '<div class="empty-state">No categories yet</div>';
+                        return;
+                    }
+                    container.innerHTML = categories.map(c => `
+                        <div class="category-item">
+                            <h4>${c.name}</h4>
+                            <div class="category-meta">
+                                ${c.product_count} products | Min ${c.min_discount_percent}% off ATL<br>
+                                Last scan: ${c.last_scanned_at ? new Date(c.last_scanned_at).toLocaleString() : 'Never'}
+                            </div>
+                            <div class="btn-group">
+                                <button class="btn-warning" onclick="scanCategory('${c.id}', this)">Scan</button>
+                                <button class="btn-danger" onclick="deleteCategory('${c.id}')">Delete</button>
+                            </div>
+                        </div>
+                    `).join('');
+                }
+
+                async function refreshDeals() {
+                    const res = await fetch('/api/deals');
+                    const data = await res.json();
+                    document.getElementById('stat-deals').textContent = data.total_count;
+                    const container = document.getElementById('deals-list');
+                    if (data.deals.length === 0) {
+                        container.innerHTML = '<div class="empty-state">No deals found yet. Add a category and scan for deals!</div>';
+                        return;
+                    }
+                    container.innerHTML = data.deals.map(d => `
+                        <div class="deal-card ${d.deal_type}">
+                            <img class="deal-img" src="${d.product_image || 'https://via.placeholder.com/100?text=No+Image'}" alt="" />
+                            <div class="deal-info">
+                                <h4><a href="${d.product_url}" target="_blank">${d.product_name.substring(0, 100)}${d.product_name.length > 100 ? '...' : ''}</a></h4>
+                                <div class="deal-meta">
+                                    ${d.rating ? `<span>Rating: ${d.rating.toFixed(1)}</span>` : ''}
+                                    ${d.review_count ? `<span>${d.review_count.toLocaleString()} reviews</span>` : ''}
+                                    <span>${d.deal_type.replace('_', ' ')}</span>
+                                </div>
+                            </div>
+                            <div class="deal-price">
+                                <div class="current-price">$${d.current_price.toFixed(2)}</div>
+                                <div class="old-price">ATL: $${d.all_time_low.toFixed(2)}</div>
+                                <div class="discount-badge ${d.deal_type === 'price_error' ? 'warning' : ''}">${d.discount_percent.toFixed(0)}% below ATL</div>
+                            </div>
+                        </div>
+                    `).join('');
                 }
 
                 async function savePrefs() {
@@ -322,56 +446,24 @@ def dashboard() -> str:
                             smtp_host: document.getElementById('pref-smtp').value || null,
                             smtp_username: document.getElementById('pref-user').value || null,
                             smtp_password: document.getElementById('pref-pass').value || null,
-                            webhook_url: document.getElementById('pref-webhook').value || null,
-                            slack_webhook_url: document.getElementById('pref-slack').value || null,
+                            instant_notifications: true,
                         })
                     });
                     const statusEl = document.getElementById('email-status');
-                    if (res.ok) {
-                        statusEl.innerHTML = '<div class="status success">Settings saved successfully!</div>';
-                    } else {
-                        statusEl.innerHTML = '<div class="status error">Failed to save settings.</div>';
-                    }
+                    statusEl.innerHTML = res.ok
+                        ? '<div class="status success">Settings saved!</div>'
+                        : '<div class="status error">Failed to save settings.</div>';
                     setTimeout(() => statusEl.innerHTML = '', 3000);
                 }
 
                 async function testEmail() {
                     const statusEl = document.getElementById('email-status');
                     statusEl.innerHTML = '<div class="status info">Sending test email...</div>';
-
                     const res = await fetch('/api/notifications/test-email', { method: 'POST' });
                     const data = await res.json();
-
-                    if (data.success) {
-                        statusEl.innerHTML = '<div class="status success">' + data.message + '</div>';
-                    } else {
-                        statusEl.innerHTML = '<div class="status error">' + data.message + '</div>';
-                    }
-                }
-
-                async function fetchPrice(productId) {
-                    const btn = event.target;
-                    btn.disabled = true;
-                    btn.textContent = 'Fetching...';
-
-                    const res = await fetch('/api/products/' + productId + '/fetch', { method: 'POST' });
-                    const data = await res.json();
-
-                    btn.disabled = false;
-                    btn.textContent = 'Fetch Price';
-
-                    if (data.success) {
-                        alert(data.message);
-                    } else {
-                        alert('Error: ' + data.message);
-                    }
-                    refresh();
-                }
-
-                async function deleteProduct(productId) {
-                    if (!confirm('Delete this product and all its alerts?')) return;
-                    await fetch('/api/products/' + productId, { method: 'DELETE' });
-                    refresh();
+                    statusEl.innerHTML = data.success
+                        ? '<div class="status success">' + data.message + '</div>'
+                        : '<div class="status error">' + data.message + '</div>';
                 }
 
                 async function loadPrefs() {
@@ -382,40 +474,13 @@ def dashboard() -> str:
                             document.getElementById('pref-email').value = data.email || '';
                             document.getElementById('pref-smtp').value = data.smtp_host || '';
                             document.getElementById('pref-user').value = data.smtp_username || '';
-                            document.getElementById('pref-webhook').value = data.webhook_url || '';
-                            document.getElementById('pref-slack').value = data.slack_webhook_url || '';
                         }
                     }
                 }
 
-                async function refresh() {
-                    const res = await fetch('/api/watchlist');
-                    const data = await res.json();
-                    document.getElementById('output').textContent = JSON.stringify(data, null, 2);
-
-                    // Update products list
-                    const listEl = document.getElementById('products-list');
-                    if (data.products && data.products.length > 0) {
-                        listEl.innerHTML = data.products.map(p => `
-                            <li class="product-item">
-                                <h4>${p.name}</h4>
-                                <div class="price">${p.current_price ? '$' + p.current_price.toFixed(2) : 'No price yet'}</div>
-                                <div class="small-text">ID: ${p.id}</div>
-                                <div class="small-text">Target: ${p.desired_price ? '$' + p.desired_price.toFixed(2) : 'Not set'}</div>
-                                <div class="actions">
-                                    <button class="warning" onclick="fetchPrice('${p.id}')">Fetch Price</button>
-                                    <button class="secondary" onclick="deleteProduct('${p.id}')">Delete</button>
-                                    <button class="secondary" onclick="document.getElementById('a-product').value='${p.id}'">Create Alert</button>
-                                </div>
-                            </li>
-                        `).join('');
-                    } else {
-                        listEl.innerHTML = '<li class="small-text">No products tracked yet. Add one above!</li>';
-                    }
-                }
-
                 // Initial load
-                refresh();
+                refreshCategories();
+                refreshDeals();
                 loadPrefs();
             </script>
         </body>

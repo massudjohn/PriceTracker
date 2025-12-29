@@ -13,7 +13,7 @@ from uuid import UUID
 import httpx
 
 from ..database import SqlRepository
-from ..models import Alert, PriceSnapshot, Product, UserPreference
+from ..models import Alert, Deal, PriceSnapshot, Product, UserPreference
 
 logger = logging.getLogger(__name__)
 
@@ -305,5 +305,97 @@ class NotificationService:
                 success=False,
                 channel="email",
                 message=f"Failed to send test email: {str(e)}",
+                sent_at=datetime.utcnow(),
+            )
+
+    def send_deal_notification(self, deal: Deal) -> NotificationResult:
+        """Send an instant notification for a detected deal."""
+        prefs = self.repo.get_preferences()
+        if not prefs or not prefs.email:
+            return NotificationResult(
+                success=False,
+                channel="email",
+                message="No email configured",
+                sent_at=datetime.utcnow(),
+            )
+
+        smtp_host = prefs.smtp_host or os.getenv("SMTP_HOST")
+        smtp_username = prefs.smtp_username or os.getenv("SMTP_USERNAME")
+        smtp_password = prefs.smtp_password or os.getenv("SMTP_PASSWORD")
+        smtp_port = int(os.getenv("SMTP_PORT", "587"))
+
+        if not smtp_host:
+            return NotificationResult(
+                success=False,
+                channel="email",
+                message="No SMTP host configured",
+                sent_at=datetime.utcnow(),
+            )
+
+        # Build email body for deal
+        deal_type_label = {
+            "all_time_low": "NEW ALL-TIME LOW",
+            "price_error": "POTENTIAL PRICE ERROR",
+            "extreme_discount": "EXTREME DISCOUNT",
+        }.get(deal.deal_type, "DEAL ALERT")
+
+        body = f"""
+{'=' * 50}
+{deal_type_label}
+{'=' * 50}
+
+Product: {deal.product_name}
+URL: {deal.product_url}
+
+{'-' * 30}
+PRICE INFORMATION
+{'-' * 30}
+Current Price: ${deal.current_price:.2f}
+All-Time Low: ${deal.all_time_low:.2f}
+Discount: {deal.discount_percent:.0f}% BELOW all-time low!
+
+{'-' * 30}
+PRODUCT QUALITY
+{'-' * 30}
+Rating: {deal.rating:.1f}/5.0 stars
+Reviews: {deal.review_count:,} reviews
+
+{'=' * 50}
+This deal was automatically detected by Deal Hunter.
+Act fast - deals like this don't last long!
+{'=' * 50}
+"""
+
+        # Subject with emoji based on deal type
+        if deal.deal_type == "price_error":
+            subject = f"⚠️ PRICE ERROR? {deal.product_name[:50]} - ${deal.current_price:.2f} ({deal.discount_percent:.0f}% below ATL)"
+        else:
+            subject = f"🔥 DEAL ALERT: {deal.product_name[:50]} - ${deal.current_price:.2f} ({deal.discount_percent:.0f}% below ATL)"
+
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = smtp_username or "deals@dealhunter"
+        message["To"] = prefs.email
+        message.set_content(body)
+
+        try:
+            with smtplib.SMTP(smtp_host, smtp_port) as smtp:
+                smtp.starttls()
+                if smtp_username and smtp_password:
+                    smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+                logger.info("Deal notification sent", extra={"deal_id": str(deal.id)})
+                return NotificationResult(
+                    success=True,
+                    channel="email",
+                    message=f"Deal notification sent to {prefs.email}",
+                    sent_at=datetime.utcnow(),
+                )
+        except Exception as e:
+            logger.exception("Failed to send deal notification")
+            return NotificationResult(
+                success=False,
+                channel="email",
+                message=f"Failed to send notification: {str(e)}",
                 sent_at=datetime.utcnow(),
             )
