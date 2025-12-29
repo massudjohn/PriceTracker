@@ -37,6 +37,13 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./price_tracker.db")
 engine = create_engine(DATABASE_URL, echo=False, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
 
+# Helper to handle UUID conversion for SQLite
+IS_SQLITE = engine.url.get_backend_name() == "sqlite"
+
+def _uuid_to_db(value: UUID) -> str | UUID:
+    """Convert UUID to string for SQLite, keep as UUID for PostgreSQL."""
+    return str(value) if IS_SQLITE else value
+
 
 class Base(DeclarativeBase):
     pass
@@ -316,7 +323,7 @@ class SqlRepository:
 
     def create_category(self, data: CategoryCreate) -> Category:
         row = CategoryTable(
-            id=uuid4(),
+            id=_uuid_to_db(uuid4()),
             name=data.name,
             url=str(data.url),
             min_reviews=data.min_reviews,
@@ -380,7 +387,7 @@ class SqlRepository:
             return _discovered_product_to_schema(existing)
 
         row = DiscoveredProductTable(
-            id=product.id,
+            id=_uuid_to_db(product.id),
             asin=product.asin,
             name=product.name,
             url=str(product.url),
@@ -392,7 +399,7 @@ class SqlRepository:
             image_url=product.image_url,
             all_time_low=product.all_time_low,
             all_time_high=product.all_time_high,
-            category_id=product.category_id,
+            category_id=_uuid_to_db(product.category_id),
         )
         self.session.add(row)
         self.session.commit()
@@ -409,8 +416,8 @@ class SqlRepository:
 
     def create_deal(self, deal: Deal) -> Deal:
         row = DealTable(
-            id=deal.id,
-            product_id=deal.product_id,
+            id=_uuid_to_db(deal.id),
+            product_id=_uuid_to_db(deal.product_id),
             product_name=deal.product_name,
             product_url=deal.product_url,
             product_image=deal.product_image,
@@ -469,7 +476,7 @@ class SqlRepository:
 
     def create_product(self, data: ProductCreate) -> Product:
         row = ProductTable(
-            id=uuid4(),
+            id=_uuid_to_db(uuid4()),
             name=data.name,
             url=str(data.url),
             desired_price=data.desired_price,
@@ -519,8 +526,8 @@ class SqlRepository:
 
     def create_alert(self, data: AlertCreate) -> Alert:
         row = AlertTable(
-            id=uuid4(),
-            product_id=data.product_id,
+            id=_uuid_to_db(uuid4()),
+            product_id=_uuid_to_db(data.product_id),
             threshold_price=data.threshold_price,
             active=data.active,
             channel=data.channel,
@@ -558,8 +565,8 @@ class SqlRepository:
 
     def record_price_snapshot(self, data: PriceSnapshotCreate, *, extreme_discount: bool, improbable_price: bool) -> PriceSnapshot:
         row = PriceSnapshotTable(
-            id=uuid4(),
-            product_id=data.product_id,
+            id=_uuid_to_db(uuid4()),
+            product_id=_uuid_to_db(data.product_id),
             current_price=data.current_price,
             list_price=data.list_price,
             availability=data.availability,
@@ -603,7 +610,7 @@ class SqlRepository:
             self.session.commit()
             self.session.refresh(existing)
             return _preferences_to_schema(existing)
-        row = UserPreferenceTable(id=uuid4(), **payload)
+        row = UserPreferenceTable(id=_uuid_to_db(uuid4()), **payload)
         self.session.add(row)
         self.session.commit()
         self.session.refresh(row)
